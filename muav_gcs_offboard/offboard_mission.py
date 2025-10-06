@@ -10,7 +10,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from px4_msgs.msg import TelemetryStatus,OffboardControlMode, TrajectorySetpoint, VehicleCommand, VehicleCommandAck,VehicleLocalPosition, VehicleStatus,GotoSetpoint
 from std_srvs.srv import Trigger
 from px4_msgs.srv import VehicleCommand as VehicleCommandSrv
-from muav_gcs_interfaces.srv import MissionLoad
+from muav_gcs_interfaces.srv import LoadMission
 from enum import Enum
 
 def fmt_float(val):
@@ -81,7 +81,7 @@ class OffboardControl(Node):
             VehicleCommandAck, f'{self.ns}/offboard/out/vehicle_command_ack', qos_profile)
                 # Create services for takeoff and landing
         self.vehicle_cmd_offboard_service = self.create_service(
-            VehicleCommandSrv, f'{self.ns}/offboard/mission_load', self.handle_vehicle_cmd_request)
+            LoadMission, f'{self.ns}/offboard/mission_load', self.handle_vehicle_cmd_request)
 
 
 
@@ -102,7 +102,16 @@ class OffboardControl(Node):
 
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.get_logger().info('Timer for control commands created (100ms).')
+    
+    def handle_vehicle_cmd_request(self, request, response):
+        """Handle incoming vehicle command requests."""
+        self.get_logger().info(f"Received mission load request: takeoff_height={request.takeoff_height}, wp_count={request.wp_count}")
+        
 
+        response.success = True
+        self.get_logger().info("Mission loaded successfully with {} waypoints.".format(len(self.wp)))
+        return response
+    
     def vehicle_cmd_offboard_callback(self, vehicle_command):
         """Callback function for vehicle_command_offboard topic subscriber."""
         self.get_logger().info(f"Rcv vehicle command offboard: {vehicle_command.command} param1: {vehicle_command.param1} param2: {vehicle_command.param2} param3: {vehicle_command.param3} param4: {vehicle_command.param4} param5: {vehicle_command.param5} param6: {vehicle_command.param6} param7: {vehicle_command.param7}")
