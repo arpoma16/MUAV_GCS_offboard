@@ -7,11 +7,12 @@ import math
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
-from px4_msgs.msg import TelemetryStatus,OffboardControlMode, TrajectorySetpoint, VehicleCommand, VehicleCommandAck,VehicleLocalPosition, VehicleStatus,GotoSetpoint
-from std_srvs.srv import Trigger
+from px4_msgs.msg import TelemetryStatus,OffboardControlMode, TrajectorySetpoint, VehicleCommand, VehicleCommandAck,VehicleLocalPosition, VehicleStatus,GotoSetpoint,SensorGps
+from std_srvs.srv import Trigger, SetBool
 from px4_msgs.srv import VehicleCommand as VehicleCommandSrv
 from muav_gcs_interfaces.srv import LoadMission
 from enum import Enum
+from muav_gcs_offboard.coordinate_transform import gps_to_ned
 
 def fmt_float(val):
     """Format a float to 2 decimal places as string."""
@@ -71,7 +72,8 @@ class OffboardControl(Node):
             VehicleStatus, f'{self.ns}/fmu/out/vehicle_status', self.vehicle_status_callback, qos_profile)
         self.vehicle_cmdResponse_subscriber = self.create_subscription(
             VehicleCommandAck, f'{self.ns}/fmu/out/vehicle_command_ack', self.vehicle_cmdResponse_callback, qos_profile)
-
+        self.vehicle_gps_subscriber = self.create_subscription(
+            SensorGps, f'{self.ns}/fmu/out/vehicle_gps_position', self.vehicle_gps_callback, qos_profile)
         # offboard topics
         self.gcs_logger_subscriber = self.create_subscription(
             TrajectorySetpoint, f'{self.ns}/offboard/in/trajectory_setpoint', self.gcs_position_callback, qos_profile)
@@ -82,8 +84,8 @@ class OffboardControl(Node):
                 # Create services for takeoff and landing
         self.vehicle_cmd_offboard_service = self.create_service(
             LoadMission, f'{self.ns}/offboard/mission_load', self.handle_vehicle_cmd_request)
-
-
+        self.vehicle_cmd_offboard_service = self.create_service(
+            SetBool, f'{self.ns}/offboard/mission/start_stop', self.handle_vehicle_start_stop_mission_request)
 
         # Initialize variables
         self.offboard_setpoint_counter = 0
@@ -96,22 +98,49 @@ class OffboardControl(Node):
         self.takeoff_point = [0.0, 0.0, 0.0]
         self.wp = [[5.0, 0.0, -10.0], [5.0, 5.0, -10.0], [0.0, 5.0, -10.0], [0.0, 0.0, -10.0]]
         self.wp_index = 0
+        self.gps_position = SensorGps()
 
         self.uav_state = UAVState.IDLE
+        self.start = False
 
 
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.get_logger().info('Timer for control commands created (100ms).')
-    
+
+    def handle_vehicle_start_stop_mission_request(self, request, response):
+        """Handle vehicle start/stop mission requests."""
+        self.start = request.data
+        if self.start:
+            self.get_logger().info("Starting offboard mission.")
+        else:
+            self.get_logger().info("Stopping offboard mission.")
+        response.success = True
+        return response
+
     def handle_vehicle_cmd_request(self, request, response):
         """Handle incoming vehicle command requests."""
-        self.get_logger().info(f"Received mission load request: takeoff_height={request.takeoff_height}, wp_count={request.wp_count}")
-        
+        self.get_logger().info(f"Received mission load request")
+        self.wp = []
+        gps_position = [0.0, 0.0, 0.0]  # Default GPS position if not availabl
+        gps_position[0] = self.gps_position.latitude_deg
+        gps_position[1] = self.gps_position.longitude_deg
+        gps_position[2] = self.gps_position.altitude_msl_m
+        for wp in request.request.waypoint:
+            ned = gps_to_ned(wp.latitude, wp.longitude, wp.altitude,
+                              gps_position[0], gps_position[1], gps_position[2])
+            self.wp.append(ned)
+
+        for i, waypoint in enumerate(self.wp):
+            self.get_logger().info(f"Waypoint {i+1}: NED({fmt_float(waypoint[0])}, {fmt_float(waypoint[1])}, {fmt_float(waypoint[2])})")
 
         response.success = True
         self.get_logger().info("Mission loaded successfully with {} waypoints.".format(len(self.wp)))
         return response
-    
+    def vehicle_gps_callback(self, gps_position):
+        """Callback function for vehicle_gps_position topic subscriber."""
+        self.gps_position = gps_position
+        if gps_position.fix_type < 3:  # 3D fix
+            self.get_logger().warn("No valid GPS fix. Using default takeoff point.")
     def vehicle_cmd_offboard_callback(self, vehicle_command):
         """Callback function for vehicle_command_offboard topic subscriber."""
         self.get_logger().info(f"Rcv vehicle command offboard: {vehicle_command.command} param1: {vehicle_command.param1} param2: {vehicle_command.param2} param3: {vehicle_command.param3} param4: {vehicle_command.param4} param5: {vehicle_command.param5} param6: {vehicle_command.param6} param7: {vehicle_command.param7}")
@@ -219,8 +248,8 @@ class OffboardControl(Node):
         msg = GotoSetpoint()
         msg.position = [float(x), float(y), float(z)]
         msg.heading = 1.57079  # (90 degree)
-        msg.max_horizontal_speed = 2.0
-        msg.max_vertical_speed = 1.0
+        msg.max_horizontal_speed = 0.01
+        msg.max_vertical_speed = 0.05
         msg.max_heading_rate = 30.0
         msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
         self.goto_setpoint_publisher.publish(msg)
@@ -254,7 +283,8 @@ class OffboardControl(Node):
         #)
 
         if self.uav_state == UAVState.IDLE:
-            self.uav_state = UAVState.TAKEOFF
+            if self.start:
+                self.uav_state = UAVState.TAKEOFF
             #self.publish_position_setpoint(0.0, 0.0, 0.0)
             #self.get_logger().info("UAV is in IDLE state, holding position at (0,0,0)")
 
@@ -290,6 +320,7 @@ class OffboardControl(Node):
             z = self.wp[self.wp_index][2]
         
             if math.sqrt((self.vehicle_local_position.x - x)**2 + (self.vehicle_local_position.y - y)**2 + (self.vehicle_local_position.z - z)**2) <= 0.3:
+                self.get_logger().info(f"Reached waypoint {self.wp_index+1} at ({x}, {y}, {z})")
                 if self.wp_index < len(self.wp)-1:
                     self.wp_index += 1
                 else:

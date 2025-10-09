@@ -13,7 +13,9 @@
   <depend>rclpy</depend>
   <depend>px4_msgs</depend>
   <depend>muav_gcs_interfaces</depend>
-
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  
   <export>
     <build_type>ament_python</build_type>
   </export>
