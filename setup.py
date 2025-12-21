@@ -24,6 +24,8 @@ setup(
     entry_points={
         'console_scripts': [
             'offboard_mission = muav_gcs_offboard.offboard_mission:main',
+            'video_stream_compress = muav_gcs_offboard.video_stream_compress:main',
+            'image_republish_compress = muav_gcs_offboard.image_republish_compress:main',
         ],
     },
     scripts=[]
