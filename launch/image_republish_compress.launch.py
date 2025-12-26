@@ -22,7 +22,7 @@ def generate_launch_description():
 
     output_topic_arg = DeclareLaunchArgument(
         'output_topic',
-        default_value='',
+        default_value='/px4_3/camera/image_compressed',
         description='Output topic for compressed images (empty = input_topic/compressed)'
     )
 
