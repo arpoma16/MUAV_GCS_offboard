@@ -24,7 +24,8 @@ def gps_to_ned(lat, lon, alt, lat_ref, lon_ref, alt_ref):
     north = g['s12'] * cos(radians(g['azi1']))
     east = g['s12'] * sin(radians(g['azi1']))
     
-    # Down component
-    down = alt_ref - alt
-    
+    # Down component (NED: negative Z = up, positive Z = down)
+    # If waypoint altitude is higher than reference, down should be negative
+    down = -(alt - alt_ref)
+
     return north, east, down
